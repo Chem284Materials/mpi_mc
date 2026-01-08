@@ -5,7 +5,7 @@
 
 class MCSimulation {
   public:
-    MCSimulation();
+    MCSimulation(MPI_Comm comm);
     void run();
 
   private:
@@ -18,27 +18,44 @@ class MCSimulation {
 
     std::vector<double> coordinates;
 
+    // MPI information
+    int mpi_size, mpi_rank;
+    MPI_Comm mpi_comm;
+
+    std::vector<int> mpi_start_index;
+    std::vector<int> mpi_end_index;
+
     // Random number generators
     std::mt19937 mt;
     std::uniform_real_distribution<double> dist;
 };
 
-MCSimulation::MCSimulation() {
+MCSimulation::MCSimulation(MPI_Comm comm) {
   mt = std::mt19937(1);
+  //std::random_device rd;
+  //mt = std::mt19937(rd());
   dist = std::uniform_real_distribution<double>(0.0, 1.0);
+
+  mpi_comm = comm;
+  MPI_Comm_size(mpi_comm, &mpi_size);
+  MPI_Comm_rank(mpi_comm, &mpi_rank);
+
+  mpi_start_index.resize(mpi_size);
+  mpi_end_index.resize(mpi_size);
 }
 
 // Generate an initial set of coordinates
 int MCSimulation::generate_initial_state(int num_particles, double box_length) {
   int particles_per_side = std::ceil( std::pow(num_particles, 1.0 / 3.0) );
   double particle_spacing = box_length / particles_per_side;
-  for (int iparticle = 0; iparticle < num_particles; iparticle++) {
-    int ix = iparticle % particles_per_side;
+  for (int mpi_index = 0; mpi_index < mpi_end_index[mpi_rank] - mpi_start_index[mpi_rank]; mpi_index++) {
+    int iparticle = mpi_index + mpi_start_index[mpi_rank];
+    int ix = (iparticle) % particles_per_side;
     int iy = (iparticle / particles_per_side) % particles_per_side;
     int iz = iparticle / (particles_per_side * particles_per_side);
-    coordinates[3*iparticle + 0] = ( ix + ( 0.1 * dist(mt) ) ) * particle_spacing;
-    coordinates[3*iparticle + 1] = ( iy + ( 0.1 * dist(mt) ) ) * particle_spacing;
-    coordinates[3*iparticle + 2] = ( iz + ( 0.1 * dist(mt) ) ) * particle_spacing;
+    coordinates[3*mpi_index + 0] = ( ix + ( 0.1 * dist(mt) ) ) * particle_spacing;
+    coordinates[3*mpi_index + 1] = ( iy + ( 0.1 * dist(mt) ) ) * particle_spacing;
+    coordinates[3*mpi_index + 2] = ( iz + ( 0.1 * dist(mt) ) ) * particle_spacing;
   }
 
   return 0;
@@ -65,18 +82,31 @@ double MCSimulation::minimum_image_distance(double *r_i, double *r_j, double box
 
 // Compute the energy of a particle
 double MCSimulation::get_particle_energy(int particle_count, double box_length, int i_particle, double cutoff2) {
-  double e_total = 0.0;
-  double *i_position = &coordinates[3*i_particle];
+  double e_partial = 0.0;
+  int i_particle_rank;
+  for ( int irank = 0; irank < mpi_size; irank++) {
+    if ( i_particle >= mpi_start_index[irank] && i_particle < mpi_end_index[irank] ) i_particle_rank = irank;
+  }
+  std::vector<double> i_position(3);
+  if ( mpi_rank == i_particle_rank ) {
+    i_position[0] = coordinates[3 * (i_particle - mpi_start_index[mpi_rank]) + 0];
+    i_position[1] = coordinates[3 * (i_particle - mpi_start_index[mpi_rank]) + 1];
+    i_position[2] = coordinates[3 * (i_particle - mpi_start_index[mpi_rank]) + 2];
+  }
+  MPI_Bcast(i_position.data(), 3, MPI_DOUBLE, i_particle_rank, mpi_comm);
 
-  for (int j_particle=0; j_particle < particle_count; j_particle++) {
-    if ( i_particle != j_particle ) {
+  for (int j_particle=0; j_particle < mpi_end_index[mpi_rank] - mpi_start_index[mpi_rank]; j_particle++) {
+    if ( i_particle != j_particle + mpi_start_index[mpi_rank] ) {
       double *j_position = &coordinates[3*j_particle];
-      double rij2 = minimum_image_distance( i_position, j_position, box_length );
+      double rij2 = minimum_image_distance( &i_position[0], j_position, box_length );
       if ( rij2 < cutoff2 ) {
-	e_total += lennard_jones_potential(rij2);
+	e_partial += lennard_jones_potential(rij2);
       }
     }
   }
+
+  double e_total;
+  MPI_Allreduce(&e_partial, &e_total, 1, MPI_DOUBLE, MPI_SUM, mpi_comm);
 
   return e_total;
 }
@@ -120,20 +150,15 @@ void MCSimulation::run() {
   double total_energy_time = 0.0;
   double total_decision_time = 0.0;
 
-  int world_size, my_rank;
-  MPI_Comm world_comm = MPI_COMM_WORLD;
-  MPI_Comm_size(world_comm, &world_size);
-  MPI_Comm_rank(world_comm, &my_rank);
-
   /******************
   * Parameter setup *
   ******************/
 
   double reduced_temperature = 0.9;
   double reduced_density = 0.9;
-  int n_steps = 500000;
+  int n_steps = 100000;
   int freq = 1000;
-  int num_particles = 100;
+  int num_particles = 10000;
   double simulation_cutoff = 3.0;
   double max_displacement = 0.1;
   bool tune_displacement = true;
@@ -144,7 +169,18 @@ void MCSimulation::run() {
   double simulation_cutoff2 = simulation_cutoff*simulation_cutoff;
   int n_trials = 0;
   int n_accept = 0;
-  coordinates = std::vector<double>(3*num_particles);
+
+  int current_start_index = 0;
+  for ( int irank=0; irank < mpi_size; irank++) {
+     int nparticles_to_operate_on = num_particles / mpi_size;
+     if ( irank < num_particles % mpi_size ) nparticles_to_operate_on++;
+     mpi_start_index[irank] = current_start_index;
+     mpi_end_index[irank] = current_start_index + nparticles_to_operate_on;
+     current_start_index += nparticles_to_operate_on;
+  }
+
+  coordinates = std::vector<double>(3 * (mpi_end_index[mpi_rank] - mpi_start_index[mpi_rank]) );
+
 
   /*************************
   * Monte Carlo Simulation *
@@ -158,11 +194,18 @@ void MCSimulation::run() {
   n_trials = 0;
   for (int i_step=0; i_step<n_steps; i_step++) {
     n_trials += 1;
-    int i_particle = floor( double(num_particles) * dist(mt) );
-    double random_displacement[3];
-    for (int i=0; i<3; i++) {
-      random_displacement[i] = ( ( 2.0 * dist(mt) ) - 1.0 ) * max_displacement;
+    int i_particle;
+    if ( mpi_rank == 0 ) {
+      i_particle = floor( double(num_particles) * dist(mt) );
     }
+    MPI_Bcast(&i_particle, 1, MPI_INT, 0, mpi_comm);
+    double random_displacement[3];
+    if ( mpi_rank == 0 ) {
+      for (int i=0; i<3; i++) {
+        random_displacement[i] = ( ( 2.0 * dist(mt) ) - 1.0 ) * max_displacement;
+      }
+    }
+    MPI_Bcast(&random_displacement[0], 3, MPI_DOUBLE, 0, mpi_comm);
 
     // get the current energy of the test particle
     double start_energy_time = MPI_Wtime();
@@ -170,9 +213,15 @@ void MCSimulation::run() {
     total_energy_time += MPI_Wtime() - start_energy_time;
 
     // get the new coordinates of the test particle
-    for (int i=0; i<3; i++) {
-      coordinates[3*i_particle + i] += random_displacement[i];
-      coordinates[3*i_particle + i] -= box_length * round(coordinates[3*i_particle + i] / box_length);
+    int i_particle_rank;
+    for ( int irank = 0; irank < mpi_size; irank++) {
+      if ( i_particle >= mpi_start_index[irank] && i_particle < mpi_end_index[irank] ) i_particle_rank = irank;
+    }
+    if ( i_particle_rank == mpi_rank ) {
+      for (int i=0; i<3; i++) {
+        coordinates[3*(i_particle - mpi_start_index[mpi_rank]) + i] += random_displacement[i];
+        coordinates[3*(i_particle - mpi_start_index[mpi_rank]) + i] -= box_length * round(coordinates[3*(i_particle - mpi_start_index[mpi_rank]) + i] / box_length);
+      }
     }
 
     // get the new energy of the test particle
@@ -183,21 +232,27 @@ void MCSimulation::run() {
     // test whether to accept or reject this step
     double start_decision_time = MPI_Wtime();
     double delta_e = proposed_energy - current_energy;
-    bool accept = accept_or_reject(delta_e, beta);
+    bool accept;
+    if ( mpi_rank == 0 ) {
+      accept = accept_or_reject(delta_e, beta);
+    }
+    MPI_Bcast(&accept, 1, MPI_CXX_BOOL, 0, mpi_comm);
     if (accept) {
       total_energy += delta_e;
       n_accept += 1;
     }
     else {
       // revert the position of the test particle
-      for (int i=0; i<3; i++) {
-	coordinates[3*i_particle + i] -= random_displacement[i];
-	coordinates[3*i_particle + i] -= box_length * round(coordinates[3*i_particle + i] / box_length);
+      if ( i_particle_rank == mpi_rank ) {
+        for (int i=0; i<3; i++) {
+	  coordinates[3*(i_particle - mpi_start_index[mpi_rank]) + i] -= random_displacement[i];
+	  coordinates[3*(i_particle - mpi_start_index[mpi_rank]) + i] -= box_length * round(coordinates[3*(i_particle - mpi_start_index[mpi_rank]) + i] / box_length);
+        }
       }
     }
 
     if ( (i_step+1) % freq == 0 ) {
-      if ( my_rank == 0 ) {
+      if ( mpi_rank == 0 ) {
 	std::cout << i_step + 1 << " " << total_energy << std::endl;
       }
 
@@ -211,7 +266,7 @@ void MCSimulation::run() {
     total_decision_time += MPI_Wtime() - start_decision_time;
   }
 
-  if ( my_rank == 0 ) {
+  if ( mpi_rank == 0 ) {
     std::cout << "Total simulation time: " << MPI_Wtime() - start_simulation_time << std::endl;
     std::cout << "    Energy time:      " << total_energy_time << std::endl;
     std::cout << "    Decision time:    " << total_decision_time << std::endl;
@@ -221,7 +276,7 @@ void MCSimulation::run() {
 
 int main(int argc, char* argv[]) {
   MPI_Init(&argc, &argv);
-  MCSimulation mysimulation;
+  MCSimulation mysimulation(MPI_COMM_WORLD);
   mysimulation.run();
   MPI_Finalize();
   return 0;
