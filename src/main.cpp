@@ -4,23 +4,23 @@
 #include <mpi.h>
 
 class MCSimulation {
-  public:
-    MCSimulation();
-    void run();
+public:
+  MCSimulation();
+  void run();
 
-  private:
-    int generate_initial_state(int num_particles, double box_length);
-    double get_particle_energy(int particle_count, double box_length, int i_particle, double cutoff2);
-    double lennard_jones_potential(double rij2);
-    double minimum_image_distance(double *r_i, double *r_j, double box_length);
-    bool accept_or_reject( double delta_e, double beta );
-    double adjust_displacement( int n_trials, int n_accept, double max_displacement );
+private:
+  int generate_initial_state(int num_particles, double box_length);
+  double get_particle_energy(int particle_count, double box_length, int i_particle, double cutoff2);
+  double lennard_jones_potential(double rij2);
+  double minimum_image_distance(double *r_i, double *r_j, double box_length);
+  bool accept_or_reject( double delta_e, double beta );
+  double adjust_displacement( int n_trials, int n_accept, double max_displacement );
 
-    std::vector<double> coordinates;
+  std::vector<double> coordinates;
 
-    // Random number generators
-    std::mt19937 mt;
-    std::uniform_real_distribution<double> dist;
+  // Random number generators
+  std::mt19937 mt;
+  std::uniform_real_distribution<double> dist;
 };
 
 MCSimulation::MCSimulation() {
@@ -73,7 +73,7 @@ double MCSimulation::get_particle_energy(int particle_count, double box_length, 
       double *j_position = &coordinates[3*j_particle];
       double rij2 = minimum_image_distance( i_position, j_position, box_length );
       if ( rij2 < cutoff2 ) {
-	e_total += lennard_jones_potential(rij2);
+        e_total += lennard_jones_potential(rij2);
       }
     }
   }
@@ -91,12 +91,12 @@ bool MCSimulation::accept_or_reject( double delta_e, double beta ) {
     double random_number = dist(mt);
     double p_acc = exp(-beta * delta_e);
 
-      if ( random_number < p_acc ) {
-	accept = true;
-      }
-      else {
-	accept = false;
-      }
+    if ( random_number < p_acc ) {
+      accept = true;
+    }
+    else {
+      accept = false;
+    }
   }
   return accept;
 }
@@ -191,20 +191,20 @@ void MCSimulation::run() {
     else {
       // revert the position of the test particle
       for (int i = 0; i < 3; ++i) {
-	coordinates[3*i_particle + i] -= random_displacement[i];
-	coordinates[3*i_particle + i] -= box_length * round(coordinates[3*i_particle + i] / box_length);
+        coordinates[3*i_particle + i] -= random_displacement[i];
+        coordinates[3*i_particle + i] -= box_length * round(coordinates[3*i_particle + i] / box_length);
       }
     }
 
     if ( (i_step + 1) % freq == 0 ) {
       if ( my_rank == 0 ) {
-	std::cout << i_step + 1 << " " << total_energy << '\n';
+        std::cout << i_step + 1 << " " << total_energy << '\n';
       }
 
       if ( tune_displacement ) {
-	max_displacement = adjust_displacement(n_trials, n_accept, max_displacement);
-	n_trials = 0;
-	n_accept = 0;
+        max_displacement = adjust_displacement(n_trials, n_accept, max_displacement);
+        n_trials = 0;
+        n_accept = 0;
       }
     }
 
@@ -216,7 +216,7 @@ void MCSimulation::run() {
     std::cout << "    Energy time:      " << total_energy_time << '\n';
     std::cout << "    Decision time:    " << total_decision_time << '\n';
   }
-  
+
 }
 
 int main(int argc, char* argv[]) {
