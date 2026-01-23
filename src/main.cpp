@@ -32,7 +32,7 @@ MCSimulation::MCSimulation() {
 int MCSimulation::generate_initial_state(int num_particles, double box_length) {
   int particles_per_side = std::ceil( std::pow(num_particles, 1.0 / 3.0) );
   double particle_spacing = box_length / particles_per_side;
-  for (int iparticle = 0; iparticle < num_particles; iparticle++) {
+  for (int iparticle = 0; iparticle < num_particles; ++iparticle) {
     int ix = iparticle % particles_per_side;
     int iy = (iparticle / particles_per_side) % particles_per_side;
     int iz = iparticle / (particles_per_side * particles_per_side);
@@ -68,7 +68,7 @@ double MCSimulation::get_particle_energy(int particle_count, double box_length, 
   double e_total = 0.0;
   double *i_position = &coordinates[3*i_particle];
 
-  for (int j_particle=0; j_particle < particle_count; j_particle++) {
+  for (int j_particle=0; j_particle < particle_count; ++j_particle) {
     if ( i_particle != j_particle ) {
       double *j_position = &coordinates[3*j_particle];
       double rij2 = minimum_image_distance( i_position, j_position, box_length );
@@ -156,11 +156,11 @@ void MCSimulation::run() {
 
   // Beginning of main MC iterative loop
   n_trials = 0;
-  for (int i_step=0; i_step<n_steps; i_step++) {
+  for (int i_step = 0; i_step < n_steps; ++i_step) {
     n_trials += 1;
     int i_particle = floor( double(num_particles) * dist(mt) );
     double random_displacement[3];
-    for (int i=0; i<3; i++) {
+    for (int i = 0; i < 3; ++i) {
       random_displacement[i] = ( ( 2.0 * dist(mt) ) - 1.0 ) * max_displacement;
     }
 
@@ -170,7 +170,7 @@ void MCSimulation::run() {
     total_energy_time += MPI_Wtime() - start_energy_time;
 
     // get the new coordinates of the test particle
-    for (int i=0; i<3; i++) {
+    for (int i = 0; i < 3; ++i) {
       coordinates[3*i_particle + i] += random_displacement[i];
       coordinates[3*i_particle + i] -= box_length * round(coordinates[3*i_particle + i] / box_length);
     }
@@ -190,15 +190,15 @@ void MCSimulation::run() {
     }
     else {
       // revert the position of the test particle
-      for (int i=0; i<3; i++) {
+      for (int i = 0; i < 3; ++i) {
 	coordinates[3*i_particle + i] -= random_displacement[i];
 	coordinates[3*i_particle + i] -= box_length * round(coordinates[3*i_particle + i] / box_length);
       }
     }
 
-    if ( (i_step+1) % freq == 0 ) {
+    if ( (i_step + 1) % freq == 0 ) {
       if ( my_rank == 0 ) {
-	std::cout << i_step + 1 << " " << total_energy << std::endl;
+	std::cout << i_step + 1 << " " << total_energy << '\n';
       }
 
       if ( tune_displacement ) {
@@ -212,9 +212,9 @@ void MCSimulation::run() {
   }
 
   if ( my_rank == 0 ) {
-    std::cout << "Total simulation time: " << MPI_Wtime() - start_simulation_time << std::endl;
-    std::cout << "    Energy time:      " << total_energy_time << std::endl;
-    std::cout << "    Decision time:    " << total_decision_time << std::endl;
+    std::cout << "Total simulation time: " << MPI_Wtime() - start_simulation_time << '\n';
+    std::cout << "    Energy time:      " << total_energy_time << '\n';
+    std::cout << "    Decision time:    " << total_decision_time << '\n';
   }
   
 }
